@@ -1,4 +1,4 @@
-# sys-warepy
+# sys-SPYWARE
 
 A comprehensive Windows system information collector that gathers detailed system data, browser history, clipboard contents, screenshots, keylogger logs, network diagnostics, and more. This tool is designed for system monitoring and diagnostics.
 
