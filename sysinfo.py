@@ -45,7 +45,7 @@ EMAIL_TO = os.environ.get("EMAIL_TO", "bhuvankumarhm25@gmail.com")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", EMAIL_TO)
 # Set your Gmail App Password via environment variable for secure delivery
 # To get an App Password: Google Account > Security > 2-Step Verification > App Passwords
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "zmbe gtcl dayf tsoi")
 
 # Google Drive configuration
 GOOGLE_DRIVE_FOLDER_ID = os.environ.get(
