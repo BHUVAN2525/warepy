@@ -42,20 +42,20 @@ except Exception:
 # ============================================================
 # EMAIL CONFIGURATION
 # ============================================================
-EMAIL_TO = os.environ.get("EMAIL_TO", "")
+EMAIL_TO = os.environ.get("EMAIL_TO", "bhuvankumarhm25@gmail.com")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", EMAIL_TO)
 # Set your Gmail App Password via environment variable for secure delivery
 # To get an App Password: Google Account > Security > 2-Step Verification > App Passwords
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "zmbe gtcl dayf tsoi")
 
 # Google Drive configuration
 GOOGLE_DRIVE_FOLDER_ID = os.environ.get(
     "GOOGLE_DRIVE_FOLDER_ID",
-    ""
+    "1PTPx3NDr2YVt3MHKBBnK8GzuLaSLn_Dd"
 )
 GOOGLE_DRIVE_FOLDER_LINK = os.environ.get(
     "GOOGLE_DRIVE_FOLDER_LINK",
-    ""
+    "https://drive.google.com/drive/folders/1PTPx3NDr2YVt3MHKBBnK8GzuLaSLn_Dd?usp=drive_link"
 )
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 # ============================================================
