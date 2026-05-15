@@ -1,6 +1,6 @@
 """
 Build Script - Converts sysinfo.py into a standalone Windows EXE
-Uses PyInstaller to create a single-file executable named kk.exe.
+Uses PyInstaller to create a single-file executable named bk.exe.
 
 Usage:
     python build_exe.py
@@ -26,7 +26,7 @@ def main():
         print("  PyInstaller installed successfully.")
     
     # Step 2: Build the EXE
-    print("\n[2/3] Building kk.exe (this may take a minute)...")
+    print("\n[2/3] Building bk.exe (this may take a minute)...")
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(script_dir, "sysinfo.py")
@@ -41,7 +41,7 @@ def main():
         sys.executable, "-m", "PyInstaller",
         "--onefile",
         "--noconsole",
-        "--name", "kk",
+        "--name", "bk",
         "--hidden-import", "win32api",
         "--hidden-import", "win32con",
         "--hidden-import", "win32security",
@@ -80,7 +80,7 @@ def main():
         return
     
     # Step 3: Success
-    exe_path = os.path.join(script_dir, "dist", "kk.exe")
+    exe_path = os.path.join(script_dir, "dist", "bk.exe")
     
     if os.path.exists(exe_path):
         size_mb = os.path.getsize(exe_path) / (1024 * 1024)
@@ -91,11 +91,11 @@ def main():
         print("=" * 60)
         print("\n  HOW TO USE:")
         print("  " + "-" * 45)
-        print(f"  Interactive mode:    kk.exe --menu")
-        print(f"  Auto email mode:    kk.exe --auto")
-        print(f"  Auto email alias:   kk.exe --report")
-        print(f"  Install to startup: kk.exe --install")
-        print(f"  Remove from startup: kk.exe --uninstall")
+        print(f"  Interactive mode:    bk.exe --menu")
+        print(f"  Auto email mode:    bk.exe --auto")
+        print(f"  Auto email alias:   bk.exe --report")
+        print(f"  Install to startup: bk.exe --install")
+        print(f"  Remove from startup: bk.exe --uninstall")
         print("  " + "-" * 45)
     else:
         print(f"\n[-] EXE not found at expected path: {exe_path}")
