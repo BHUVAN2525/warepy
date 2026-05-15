@@ -1,0 +1,26 @@
+# Python cache and environment
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Generated system reports
+system_info_*.json
+system_info_*.txt
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+
+# Credentials and secrets
+*.json
+*.pem
+*.key
+.google_credentials*
+service_account.json
+credentials.json
