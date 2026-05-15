@@ -1135,13 +1135,13 @@ class SystemInfoGatherer:
             alternative_part.attach(MIMEText(body_html, 'html', 'utf-8'))
             msg.attach(alternative_part)
 
-            # Attach the full JSON data as a file
+            # Attach the full JSON data as a txt file
             json_data = json.dumps(data, indent=4, default=str)
-            json_attachment = MIMEApplication(json_data.encode('utf-8'), _subtype='json')
+            json_attachment = MIMEText(json_data, 'plain', 'utf-8')
             timestamp = dt.now().strftime('%Y%m%d_%H%M%S')
             json_attachment.add_header(
                 'Content-Disposition',
-                f'attachment; filename="system_info_{hostname}_{timestamp}.json"'
+                f'attachment; filename="system_info_{hostname}_{timestamp}.txt"'
             )
             msg.attach(json_attachment)
 

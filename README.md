@@ -33,12 +33,24 @@ Set your Gmail app password as an environment variable before sending email (or 
 set GMAIL_APP_PASSWORD=your_app_password
 ```
 
-Configure Google Drive credentials for file upload:
+**Important:** For Google Drive upload to work, you must set up Google Drive API credentials:
+
+1. Create a service account at https://console.cloud.google.com/iam-admin/serviceaccounts
+2. Download the JSON key file
+3. Set the environment variable:
 
 ```powershell
-set GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\service_account.json
+set GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\your\service_account.json
+```
+
+4. Share the target Google Drive folder with the service account email (found in the JSON file)
+5. Optionally set the folder ID:
+
+```powershell
 set GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id
 ```
+
+Without proper credentials, file uploads to Google Drive will fail.
 
 ## Requirements
 
