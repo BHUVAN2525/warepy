@@ -11,6 +11,8 @@ dist/
 # Generated system reports
 system_info_*.json
 system_info_*.txt
+system_info_*.txt.json
+system_report_*.zip
 
 # Temporary files
 *.log
@@ -18,9 +20,9 @@ system_info_*.txt
 *.bak
 
 # Credentials and secrets
-*.json
 *.pem
 *.key
 .google_credentials*
 service_account.json
 credentials.json
+google_credentials.json

