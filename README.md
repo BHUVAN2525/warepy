@@ -1,4 +1,4 @@
-# sys-SPYWARE — Offensive Security Research Project
+# SYS-SPYWARE — Offensive Security Research Project
 
 > **Author:** Bhuvan Kumar HM 
 
